@@ -16,7 +16,7 @@ const s = (name, description, options = []) => {
 };
 const local = (name, description, options = []) => s(name, description, options);
 const child = (name, description, options = []) => {
-  const command = new SlashCommandBuilder().setName(name).setDescription(description);
+  const command = new SlashCommandSubcommandBuilder().setName(name).setDescription(description);
   for (const option of options) command.addStringOption(o => { o.setName(option.name).setDescription(option.description).setRequired(Boolean(option.required)); return o; });
   return command;
 };
