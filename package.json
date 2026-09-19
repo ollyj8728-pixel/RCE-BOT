@@ -1,0 +1,22 @@
+{
+  "name": "rust-console-rce-bot",
+  "version": "0.1.0",
+  "description": "Original free public Discord bot for Rust Console Edition communities.",
+  "type": "module",
+  "private": true,
+  "main": "index.js",
+  "license": "MIT",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch src/index.js",
+    "register": "node src/register-commands.js"
+  },
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "better-sqlite3": "^11.8.1",
+    "discord.js": "^14.16.3",
+    "dotenv": "^16.4.7",
+    "pino": "^9.6.0",
+    "uuid": "^11.0.5"
+  }
+}
