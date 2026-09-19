@@ -227,5 +227,5 @@ client.on('interactionCreate', async i => {
   } catch(e) { log.error(e); if(!i.replied && !i.deferred) await i.reply({content:'Command failed. Check the bot logs.',ephemeral:true}); else if(i.deferred) await i.editReply({content:'Command failed. Check the bot logs.'}); }
 });
 client.on('error', error => log.error({err:error}, 'Discord client error'));
-
-[Showing lines 1-229 of 232. Use offset=230 to continue.]
+setInterval(() => { for (const guild of client.guilds.cache.values()) refreshTicketPanels(guild.id).catch(error => log.warn({err:error}, 'Ticket refresh failed')); }, 60000);
+client.login(token).catch(error => { log.fatal({err:error}, 'Discord login failed; verify DISCORD_TOKEN'); process.exit(1); });
