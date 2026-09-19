@@ -123,6 +123,7 @@ const ticketPanel = (guildId) => {
     {label:'Ticket Clan',value:'clan',description:'Clan requests and clan problems',emoji:'👥'},
     {label:'Ticket Shop',value:'shop',description:'Store or product information',emoji:'💎'},
     {label:'Ticket Raid',value:'raid',description:'Bounty raid or raid-related problems',emoji:'⚠️'},
+
     {label:'Ticket Bug',value:'bug',description:'In-game or bot bugs and glitches',emoji:'🐛'}
   );
   return {embeds:[brandEmbed(new EmbedBuilder().setColor(0x7c3aed).setTitle('📩 Valora - Support').setDescription('For any issue you encounter or questions you have plz select one of the following choices.\n\nIf you are looking for the commands list | how they work, do `/help`. This will provide you the full list of commands and make response time quicker!').addFields({name:'📄 Ticket General',value:'For any request or question that is not specified in the following categories.'},{name:'🏠 Ticket Base',value:'Any questions or problems related to your base or your area can be discussed in this ticket.'},{name:'👥 Ticket Clan',value:'Ticket made to respond to clan requests or possible specific problems.'},{name:'💎 Ticket Shop',value:'Information about our online store or any product.'},{name:'⚠️ Ticket Raid',value:'Ticket made for bounty raid or raid-related problems.'},{name:'🐛 Ticket Bug',value:'For any bug/glitch found in-game or with our bots.'},{name:'📊 Support Status',value:`**Open Tickets (Total):** ${total}\n**Open EU Tickets:** ${eu}\n**Open NA Tickets:** ${na}\n**Response Speed:** ⚡ Fast\n**Estimated Help Time:** ⏱️ 12 mins`}).setFooter({text:'Support - Valora 5x [EU] • 2026'}).setTimestamp())],components:[new ActionRowBuilder().addComponents(menu)]};
@@ -231,5 +232,5 @@ client.on('interactionCreate', async i => {
   } catch(e) { log.error(e); if(!i.replied && !i.deferred) await i.reply({content:'Command failed. Check the bot logs.',ephemeral:true}); else if(i.deferred) await i.editReply({content:'Command failed. Check the bot logs.'}); }
 });
 client.on('error', error => log.error({err:error}, 'Discord client error'));
-
-[Showing lines 1-233 of 236. Use offset=234 to continue.]
+setInterval(() => { for (const guild of client.guilds.cache.values()) refreshTicketPanels(guild.id).catch(error => log.warn({err:error}, 'Ticket refresh failed')); }, 60000);
+client.login(token).catch(error => { log.fatal({err:error}, 'Discord login failed; verify DISCORD_TOKEN'); process.exit(1); });
