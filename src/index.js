@@ -118,6 +118,8 @@ const ticketPanel = (guildId) => {
   const na=db.prepare("SELECT COUNT(*) AS n FROM tickets WHERE guild_id=? AND status='open' AND region='NA'").get(guildId)?.n || 0;
   const menu = new StringSelectMenuBuilder().setCustomId('ticket_category').setPlaceholder('📩  Select a support category').addOptions(
     {label:'Ticket General',value:'general',description:'General requests and questions',emoji:'📄'},
+
+[137 more lines in file. Use offset=121 to continue.]
     {label:'Ticket Base',value:'base',description:'Base or area questions and problems',emoji:'🏠'},
     {label:'Ticket Clan',value:'clan',description:'Clan requests and clan problems',emoji:'👥'},
     {label:'Ticket Shop',value:'shop',description:'Store or product information',emoji:'💎'},
@@ -233,5 +235,24 @@ client.on('interactionCreate', async i => {
         const channel = i.options.getString('channel');
         const message = i.options.getString('message') || '5X Gather Rates\nInstant Crafting\nFast Respawn\nAutomatic Events\n100+ Players';
         const ms = Date.parse(wipeAt);
-
-[Showing lines 1-235 of 257. Use offset=236 to continue.]
+        if (!validText(server,100) || Number.isNaN(ms)) return reply(i,'Invalid wipe configuration','Use a valid ISO date/time.');
+        if (channel && !/^\d{17,20}$/.test(channel)) return reply(i,'Invalid channel','Use a numeric Discord channel ID.');
+        db.prepare('INSERT INTO wipe_configs (guild_id,channel_id,server_name,wipe_at,latest_wipe_at,announcement,image_url,configured_by,updated_at) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(guild_id) DO UPDATE SET channel_id=excluded.channel_id,server_name=excluded.server_name,wipe_at=excluded.wipe_at,announcement=excluded.announcement,configured_by=excluded.configured_by,updated_at=excluded.updated_at').run(i.guildId,channel||null,server,new Date(ms).toISOString(),null,message,BRAND_BANNER,i.user.id,new Date().toISOString());
+        audit(i.guildId,i.user.id,'wipe.configured',server);
+        return reply(i,'Wipe configuration saved',server+' configured for <t:'+Math.floor(ms/1000)+':F> (<t:'+Math.floor(ms/1000)+':R>).');
+      }
+      if (!cfg) return reply(i,'No wipe configuration','Run /wipe config first.');
+      const stamp=Math.floor(Date.parse(cfg.wipe_at)/1000);
+      if (sub === 'announcement') {
+        const embed=new EmbedBuilder().setColor(0x7c3aed).setTitle('SPINBACK EU 6X WIPE 🇪🇺').setDescription('<t:'+stamp+':F> (<t:'+stamp+':R>)\n\n**'+cfg.server_name+'**\n\n**Server Information**\n'+cfg.announcement).setFooter({text:BRAND}).setTimestamp();
+        if (cfg.image_url) embed.setImage(cfg.image_url);
+        return i.reply({embeds:[brandEmbed(embed)]});
+      }
+      return reply(i,'Wipe information','Server: **'+cfg.server_name+'**\nNext wipe: <t:'+stamp+':F> (<t:'+stamp+':R>)');
+    }
+    return reply(i,'Module ready','This command is available with safe local records. Live Rust actions require an authenticated provider adapter.');
+  } catch(e) { log.error(e); if(!i.replied && !i.deferred) await i.reply({content:'Command failed. Check the bot logs.',ephemeral:true}); else if(i.deferred) await i.editReply({content:'Command failed. Check the bot logs.'}); }
+});
+client.on('error', error => log.error({err:error}, 'Discord client error'));
+setInterval(() => { for (const guild of client.guilds.cache.values()) refreshTicketPanels(guild.id).catch(error => log.warn({err:error}, 'Ticket refresh failed')); }, 60000);
+client.login(token).catch(error => { log.fatal({err:error}, 'Discord login failed; verify DISCORD_TOKEN'); process.exit(1); });
