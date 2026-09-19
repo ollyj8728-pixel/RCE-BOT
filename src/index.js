@@ -228,3 +228,4 @@ client.on('interactionCreate', async i => {
     if (i.commandName === 'wipe') { const row=db.prepare('SELECT * FROM wipe_requests WHERE guild_id=? ORDER BY created_at DESC LIMIT 1').get(i.guildId); return reply(i,'Wipe information',row?`Status: **${row.status}**\nRequested: ${row.created_at}\nAnnouncement: ${row.announcement||'None'}\n\nNo live wipe has been performed.`:'No wipe request recorded.'); }
     if (i.commandName === 'monitor') { const rows=db.prepare('SELECT name,region,status,last_checked FROM servers WHERE guild_id=? AND enabled=1').all(i.guildId); return reply(i,'Server monitor',rows.length ? rows.map(r => '• **'+r.name+'** ['+r.region+'] — '+r.status).join('\n') : 'No enabled servers configured.'); }
 
+[Showing lines 1-229 of 236. Use offset=230 to continue.]
