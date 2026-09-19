@@ -66,11 +66,12 @@ client.on('interactionCreate', async i => {
   try {
     if (i.isStringSelectMenu() && i.customId === 'ticket_category') {
       const category=i.values[0];
-      const regionMenu=new StringSelectMenuBuilder().setCustomId(`ticket_region:${category}`).setPlaceholder('Choose your region').addOptions({label:'EU',value:'EU',description:'European support team'},{label:'NA',value:'NA',description:'North American support team'});
+      const regionMenu=new StringSelectMenuBuilder().setCustomId(`ticket_region:${category}`).setPlaceholder('Choose your region').addOptions({label:'EU',value:'EU',description:'European support team'},{label:'NA — COMING SOON',value:'NA',description:'North American tickets are coming soon'});
       return i.update({components:[new ActionRowBuilder().addComponents(regionMenu)]});
     }
     if (i.isStringSelectMenu() && i.customId.startsWith('ticket_region:')) {
       const category=i.customId.split(':')[1],region=i.values[0];
+      if (region === 'NA') return i.reply({content:'NA support is coming soon. Please select EU for now.',ephemeral:true});
       const modal=new ModalBuilder().setCustomId(`ticket_modal:${category}:${region}`).setTitle(`${region} support ticket`);
       const question=new TextInputBuilder().setCustomId('question').setLabel('How can we help?').setStyle(TextInputStyle.Paragraph).setPlaceholder('Tell us what happened and include your server/player details.').setRequired(true).setMaxLength(1800);
       return i.showModal(modal.addComponents(new ActionRowBuilder().addComponents(question)));
