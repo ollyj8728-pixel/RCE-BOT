@@ -1,4 +1,4 @@
-import { SlashCommandBuilder, PermissionFlagsBits } from 'discord.js';
+import { SlashCommandBuilder, SlashCommandSubcommandBuilder } from 'discord.js';
 
 const text = (name, description, required = false) => {
   const option = { name, description, required };
@@ -18,7 +18,6 @@ const local = (name, description, options = []) => s(name, description, options)
 const child = (name, description, options = []) => {
   const command = new SlashCommandBuilder().setName(name).setDescription(description);
   for (const option of options) command.addStringOption(o => { o.setName(option.name).setDescription(option.description).setRequired(Boolean(option.required)); return o; });
-
   return command;
 };
 
@@ -39,7 +38,6 @@ export const FIRST_RELEASE_COMMANDS = [
   sub('ticket', 'Use the existing Valora support ticket panel safely', [child('panel', 'Show panel instructions'), child('status', 'Show your ticket status')]),
   sub('report', 'Create and review local reports', [child('create', 'Create a report', [text('subject', 'Player or subject', true), text('details', 'Details', true)]), child('status', 'View your report status'), child('list', 'Staff: list reports'), child('view', 'Staff: view a report', [text('id', 'Report ID', true)])]),
   sub('staff', 'Valora staff tools', [child('command-center', 'Open the staff command center'), child('player-inspect', 'Inspect a local player record', [text('player', 'Player name or Discord ID', true)]), child('audit-log', 'View recent audit records'), child('permission-check', 'Check your Valora permissions')]),
-
   // Server is already registered in the existing source; these subcommands are appended by the main file only when absent.
   local('rates', 'Show current Valora rate records'),
   local('wipe-reminder', 'Show the local wipe reminder')
