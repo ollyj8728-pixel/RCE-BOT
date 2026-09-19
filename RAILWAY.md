@@ -18,10 +18,24 @@ LOG_LEVEL=info
 ```
 
 5. Attach a persistent Railway volume mounted at `/data`, otherwise SQLite data can be lost on redeploy.
-6. Deploy and check logs for `RCE bot online`.
+6. Deploy and check logs for `Rustworks RCE bot online`.
 
-The repository auto-registers global slash commands when the bot starts. Discord global command updates can take time to appear. The bot should be invited with `bot` and `applications.commands` scopes.
+The repository auto-registers global slash commands when the bot starts. Discord global command updates can take time to appear. Invite the bot with `bot` and `applications.commands` scopes.
 
-## Current command boundary
+## Support tickets
 
-Community, clan, event, home, VIP, schedule, zone, leaderboard, player, logs, automod, and setup records are stored per Discord server. In-game actions still require an authorized provider-supported Rust Console RCON/API adapter. The bot does not execute shell commands or arbitrary user input.
+Run `/ticket-panel` in the support channel. It posts the Rustworks RCE panel with:
+
+- Support Tickets
+- Support Status
+- Open total, EU, and NA counts
+- Fast response label
+- 12-minute estimated help time
+- Rustworks branding
+- Support option select menu
+- EU/NA region selection
+- Question modal
+- Private ticket channel creation
+- Close-ticket button
+
+The bot needs `Manage Channels`, `View Channel`, `Send Messages`, and `Read Message History` permissions for ticket channels.
