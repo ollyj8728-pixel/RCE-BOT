@@ -62,20 +62,28 @@ const ticketPanel = () => {
 const reply = (i, title, description, fields=[]) => i.reply({ embeds: [new EmbedBuilder().setColor(0x8b5cf6).setTitle(title).setDescription(description).addFields(fields)] });
 
 client.once('ready', async () => {
+  const rest = new REST({version:'10'}).setToken(process.env.DISCORD_TOKEN);
+  const applicationId = client.user.id;
+  const configuredGuildId = process.env.DISCORD_GUILD_ID?.trim();
   try {
-    const rest = new REST({version:'10'}).setToken(process.env.DISCORD_TOKEN);
-    const guildId = process.env.DISCORD_GUILD_ID?.trim();
-    const route = guildId ? Routes.applicationGuildCommands(process.env.DISCORD_CLIENT_ID, guildId) : Routes.applicationCommands(process.env.DISCORD_CLIENT_ID);
-    await rest.put(route, {body:commands});
+    if (configuredGuildId) {
+      await rest.put(Routes.applicationGuildCommands(applicationId, configuredGuildId), {body:commands});
+      log.info({guildId:configuredGuildId,commandCount:commands.length}, 'Slash commands registered to configured guild');
+    } else {
+      const guilds = [...client.guilds.cache.keys()];
+      for (const guildId of guilds) {
+        await rest.put(Routes.applicationGuildCommands(applicationId, guildId), {body:commands});
+      }
+      log.info({guildCount:guilds.length,commandCount:commands.length}, 'Slash commands registered to every joined guild');
+    }
+    await rest.put(Routes.applicationCommands(applicationId), {body:commands});
     await client.user.setPresence({activities:[{name:'Rust Console communities',type:0}],status:'online'});
-    log.info({user:client.user.tag,brand:BRAND,commandCount:commands.length,scope:guildId?'guild':'global'}, 'Rustworks RCE bot online; slash commands registered');
+    log.info({user:client.user.tag,brand:BRAND,commandCount:commands.length}, 'Rustworks RCE bot online');
   } catch (error) {
-    log.error({err:error}, 'Slash-command registration failed');
+    log.error({err:error,applicationId,configuredGuildId,joinedGuilds:[...client.guilds.cache.keys()]}, 'Slash-command registration failed; check token, scopes, and guild ID');
   }
 });
 
-process.on('unhandledRejection', error => log.error({err:error}, 'Unhandled promise rejection'));
-process.on('uncaughtException', error => { log.fatal({err:error}, 'Uncaught exception'); process.exit(1); });
 client.on('interactionCreate', async i => {
   try {
     if (i.isStringSelectMenu() && i.customId === 'ticket_category') {
