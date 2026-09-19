@@ -228,9 +228,5 @@ client.on('interactionCreate', async i => {
       const cfg=db.prepare('SELECT * FROM wipe_configs WHERE guild_id=?').get(i.guildId);
       if (sub === 'config') {
         if (!(await requireStaff(i))) return;
-        const server=i.options.getString('server').trim();
-        const wipeAt=i.options.getString('wipe_at').trim();
-        const latest=i.options.getString('latest_wipe');
-        const channel=i.options.getString('channel');
 
-[Showing lines 1-234 of 260. Use offset=235 to continue.]
+[Showing lines 1-230 of 253. Use offset=231 to continue.]
