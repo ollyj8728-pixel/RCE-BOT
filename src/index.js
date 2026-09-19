@@ -6,7 +6,13 @@ import { randomUUID } from 'node:crypto';
 
 const log = pino({ level: process.env.LOG_LEVEL || 'info' });
 const required = ['DISCORD_TOKEN', 'DISCORD_CLIENT_ID'];
-for (const key of required) if (!process.env[key]) throw new Error(`Missing ${key}. Copy .env.example to .env.`);
+for (const key of required) if (!process.env[key]?.trim()) throw new Error(`Missing ${key}. Add it in Railway Variables, then redeploy.`);
+const token = process.env.DISCORD_TOKEN.trim();
+const clientId = process.env.DISCORD_CLIENT_ID.trim();
+const guildId = process.env.DISCORD_GUILD_ID?.trim();
+if (!/^\d{17,20}$/.test(clientId)) throw new Error('DISCORD_CLIENT_ID must be the numeric Discord Application ID.');
+if (guildId && !/^\d{17,20}$/.test(guildId)) throw new Error('DISCORD_GUILD_ID must be the numeric Discord Server ID.');
+log.info({clientId, guildId: guildId || null, node: process.version}, 'Railway configuration loaded (token hidden)');
 
 const db = new Database(process.env.DB_PATH || './rce-bot.sqlite');
 db.pragma('journal_mode = WAL');
@@ -62,9 +68,9 @@ const ticketPanel = () => {
 const reply = (i, title, description, fields=[]) => i.reply({ embeds: [new EmbedBuilder().setColor(0x8b5cf6).setTitle(title).setDescription(description).addFields(fields)] });
 
 client.once('ready', async () => {
-  const rest = new REST({version:'10'}).setToken(process.env.DISCORD_TOKEN);
+  const rest = new REST({version:'10'}).setToken(token);
   const applicationId = client.user.id;
-  const configuredGuildId = process.env.DISCORD_GUILD_ID?.trim();
+  const configuredGuildId = guildId;
   try {
     if (configuredGuildId) {
       await rest.put(Routes.applicationGuildCommands(applicationId, configuredGuildId), {body:commands});
@@ -129,4 +135,5 @@ client.on('interactionCreate', async i => {
     return reply(i,'Module ready','This command is scaffolded and ready for its Rust Console server adapter.');
   } catch(e) { log.error(e); if(!i.replied) await i.reply({content:'Command failed. Check the bot logs.',ephemeral:true}); }
 });
-client.login(process.env.DISCORD_TOKEN);
+client.on('error', error => log.error({err:error}, 'Discord client error'));
+client.login(token).catch(error => { log.fatal({err:error}, 'Discord login failed; verify DISCORD_TOKEN'); process.exit(1); });
