@@ -36,6 +36,12 @@ CREATE TABLE IF NOT EXISTS ticket_panels (guild_id TEXT NOT NULL, channel_id TEX
 CREATE TABLE IF NOT EXISTS setup_progress (guild_id TEXT PRIMARY KEY, roles_done INTEGER NOT NULL DEFAULT 0, logs_done INTEGER NOT NULL DEFAULT 0, server_done INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS setup_roles (guild_id TEXT NOT NULL, role_type TEXT NOT NULL, role_id TEXT NOT NULL, PRIMARY KEY(guild_id,role_type));
 `);
+for (const migration of [
+  "ALTER TABLE servers ADD COLUMN region TEXT NOT NULL DEFAULT 'EU'",
+  "ALTER TABLE servers ADD COLUMN description TEXT NOT NULL DEFAULT ''",
+  "ALTER TABLE servers ADD COLUMN notes TEXT NOT NULL DEFAULT ''"
+]) { try { db.exec(migration); } catch (error) { if (!String(error.message).includes('duplicate column name')) throw error; } }
+
 
 const SAFE_CONSOLE_ACTIONS = new Set(['players','playerlistids','listid','banlistex','printpos','getbuildinginfo','global.players','global.playerlistids','global.listid','global.banlistex','chat.enabled','writecfg','env.time','weather.rain','adminclouds','adminfog','adminwind']);
 const commands = [
