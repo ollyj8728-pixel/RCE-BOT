@@ -76,12 +76,15 @@ const ticketPanel = (guildId) => {
   const total=db.prepare("SELECT COUNT(*) AS n FROM tickets WHERE guild_id=? AND status='open'").get(guildId)?.n || 0;
   const eu=db.prepare("SELECT COUNT(*) AS n FROM tickets WHERE guild_id=? AND status='open' AND region='EU'").get(guildId)?.n || 0;
   const na=db.prepare("SELECT COUNT(*) AS n FROM tickets WHERE guild_id=? AND status='open' AND region='NA'").get(guildId)?.n || 0;
-  const menu = new StringSelectMenuBuilder().setCustomId('ticket_category').setPlaceholder('🎫  Choose how we can help').addOptions(
-    {label:'Rust Console Support',value:'rust_support',description:'Server, gameplay, RCON, and player help',emoji:'🛠️'},
-    {label:'Bot Support',value:'bot_support',description:'Discord bot setup and command help',emoji:'🤖'},
-    {label:'Report a Problem',value:'report',description:'Report a bug or community issue',emoji:'🚨'}
+  const menu = new StringSelectMenuBuilder().setCustomId('ticket_category').setPlaceholder('📩  Select a support category').addOptions(
+    {label:'Ticket General',value:'general',description:'General requests and questions',emoji:'📄'},
+    {label:'Ticket Base',value:'base',description:'Base or area questions and problems',emoji:'🏠'},
+    {label:'Ticket Clan',value:'clan',description:'Clan requests and clan problems',emoji:'👥'},
+    {label:'Ticket Shop',value:'shop',description:'Store or product information',emoji:'💎'},
+    {label:'Ticket Raid',value:'raid',description:'Bounty raid or raid-related problems',emoji:'⚠️'},
+    {label:'Ticket Bug',value:'bug',description:'In-game or bot bugs and glitches',emoji:'🐛'}
   );
-  return {embeds:[brandEmbed(new EmbedBuilder().setColor(0x7c3aed).setTitle('🎫  Support Tickets').setDescription('Select a support option, then choose **EU** or **NA** before filling in your questions.\n\nOur team will see your private ticket and help you as soon as possible.').addFields({name:'📊  Support Status',value:`**Open Tickets (Total):** ${total}\n**Open EU Tickets:** ${eu}\n**Open NA Tickets:** ${na}\n**Response Speed:** ⚡ Fast\n**Estimated Help Time:** ⏱️ 12 mins`},{name:'🌍  Regions',value:'🇪🇺 EU support is available now\n🇺🇸 NA support is **COMING SOON**'}).setFooter({text:`${BRAND}  •  Status refreshes every minute`}).setTimestamp())],components:[new ActionRowBuilder().addComponents(menu)]};
+  return {embeds:[brandEmbed(new EmbedBuilder().setColor(0x7c3aed).setTitle('📩 Valora - Support').setDescription('For any issue you encounter or questions you have plz select one of the following choices.\n\nIf you are looking for the commands list | how they work, do `/help`. This will provide you the full list of commands and make response time quicker!').addFields({name:'📄 Ticket General',value:'For any request or question that is not specified in the following categories.'},{name:'🏠 Ticket Base',value:'Any questions or problems related to your base or your area can be discussed in this ticket.'},{name:'👥 Ticket Clan',value:'Ticket made to respond to clan requests or possible specific problems.'},{name:'💎 Ticket Shop',value:'Information about our online store or any product.'},{name:'⚠️ Ticket Raid',value:'Ticket made for bounty raid or raid-related problems.'},{name:'🐛 Ticket Bug',value:'For any bug/glitch found in-game or with our bots.'},{name:'📊 Support Status',value:`**Open Tickets (Total):** ${total}\n**Open EU Tickets:** ${eu}\n**Open NA Tickets:** ${na}\n**Response Speed:** ⚡ Fast\n**Estimated Help Time:** ⏱️ 12 mins`}).setFooter({text:'Support - Valora 5x [EU] • 2026'}).setTimestamp())],components:[new ActionRowBuilder().addComponents(menu)]};
 };
 const refreshTicketPanels = async (guildId) => {
   const rows=db.prepare('SELECT channel_id,message_id FROM ticket_panels WHERE guild_id=?').all(guildId);
