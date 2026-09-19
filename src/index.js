@@ -230,7 +230,8 @@ client.on('interactionCreate', async i => {
         if (!(await requireStaff(i))) return;
         const server = i.options.getString('server').trim();
         const wipeAt = i.options.getString('wipe_at').trim();
-        const latest = i.options.getString('latest_wipe');
         const channel = i.options.getString('channel');
+        const message = i.options.getString('message') || '5X Gather Rates\nInstant Crafting\nFast Respawn\nAutomatic Events\n100+ Players';
+        const ms = Date.parse(wipeAt);
 
-[Showing lines 1-234 of 260. Use offset=235 to continue.]
+[Showing lines 1-235 of 257. Use offset=236 to continue.]
