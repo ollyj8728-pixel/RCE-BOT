@@ -4,6 +4,7 @@ import Database from 'better-sqlite3';
 import pino from 'pino';
 import { randomUUID } from 'node:crypto';
 import net from 'node:net';
+import { BOT_CONFIG } from './config.js';
 
 const log = pino({ level: process.env.LOG_LEVEL || 'info' });
 const required = ['DISCORD_TOKEN', 'DISCORD_CLIENT_ID'];
