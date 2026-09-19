@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, PermissionFlagsBits, EmbedBuilder } from 'discord.js';
+import { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, PermissionFlagsBits, EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, ChannelType, PermissionsBitField } from 'discord.js';
 import Database from 'better-sqlite3';
 import pino from 'pino';
 import { randomUUID } from 'node:crypto';
@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS vip_members (guild_id TEXT NOT NULL, user_id TEXT NOT
 CREATE TABLE IF NOT EXISTS zones (id TEXT PRIMARY KEY, guild_id TEXT NOT NULL, name TEXT NOT NULL, type TEXT NOT NULL, x REAL NOT NULL, y REAL NOT NULL, z REAL NOT NULL, radius REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS audit_logs (id TEXT PRIMARY KEY, guild_id TEXT NOT NULL, actor_id TEXT NOT NULL, action TEXT NOT NULL, target TEXT, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS automod (guild_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 0, blocked_words TEXT NOT NULL DEFAULT '');
+CREATE TABLE IF NOT EXISTS tickets (id TEXT PRIMARY KEY, guild_id TEXT NOT NULL, channel_id TEXT NOT NULL, user_id TEXT NOT NULL, region TEXT NOT NULL, category TEXT NOT NULL, question TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open', created_at TEXT NOT NULL, closed_at TEXT);
 `);
 
 const commands = [
@@ -43,16 +44,48 @@ const commands = [
   new SlashCommandBuilder().setName('logs').setDescription('View recent bot audit logs').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
   new SlashCommandBuilder().setName('announcement').setDescription('Create a community announcement').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild).addStringOption(o=>o.setName('message').setDescription('Announcement text').setRequired(true)),
   new SlashCommandBuilder().setName('automod').setDescription('Configure basic automod').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild).addBooleanOption(o=>o.setName('enabled').setDescription('Enable automod').setRequired(true)).addStringOption(o=>o.setName('blocked_words').setDescription('Comma-separated words')),
-  new SlashCommandBuilder().setName('maintenance').setDescription('Show maintenance mode status').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+  new SlashCommandBuilder().setName('maintenance').setDescription('Show maintenance mode status').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+  new SlashCommandBuilder().setName('ticket-panel').setDescription('Post the Rustworks RCE support ticket panel').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+  new SlashCommandBuilder().setName('tickets').setDescription('Show support ticket status').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
 ].map(c=>c.toJSON());
 
-const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers] });
+const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildMessages] });
+const BRAND = 'rustworks • RCE';
+const ticketPanel = () => {
+  const menu = new StringSelectMenuBuilder().setCustomId('ticket_category').setPlaceholder('Select a support option').addOptions(
+    {label:'Rust Console Support',value:'rust_support',description:'Server, gameplay, RCON, and player help',emoji:'🛠️'},
+    {label:'Bot Support',value:'bot_support',description:'Discord bot setup and command help',emoji:'🤖'},
+    {label:'Report a Problem',value:'report',description:'Report a bug or community issue',emoji:'🚨'}
+  );
+  return {embeds:[new EmbedBuilder().setColor(0x8b5cf6).setTitle('Support Tickets').setDescription('Select a support option, then choose EU or NA before filling your questions.').addFields({name:'Support Status',value:'Open Tickets (Total): 0\nOpen EU Tickets: 0\nOpen NA Tickets: 0\nResponse Speed: Fast\nEstimated Help Time: 12 mins'}).setFooter({text:BRAND})],components:[new ActionRowBuilder().addComponents(menu)]};
+};
 const reply = (i, title, description, fields=[]) => i.reply({ embeds: [new EmbedBuilder().setColor(0x8b5cf6).setTitle(title).setDescription(description).addFields(fields)] });
 
-client.once('ready', async () => { const rest = new REST({version:'10'}).setToken(process.env.DISCORD_TOKEN); await rest.put(Routes.applicationCommands(process.env.DISCORD_CLIENT_ID), {body:commands}); log.info({user:client.user.tag}, 'RCE bot online'); });
+client.once('ready', async () => { const rest = new REST({version:'10'}).setToken(process.env.DISCORD_TOKEN); await rest.put(Routes.applicationCommands(process.env.DISCORD_CLIENT_ID), {body:commands}); await client.user.setPresence({activities:[{name:'Rust Console communities',type:0}],status:'online'}); log.info({user:client.user.tag,brand:BRAND}, 'Rustworks RCE bot online'); });
 client.on('interactionCreate', async i => {
-  if (!i.isChatInputCommand()) return;
   try {
+    if (i.isStringSelectMenu() && i.customId === 'ticket_category') {
+      const category=i.values[0];
+      const regionMenu=new StringSelectMenuBuilder().setCustomId(`ticket_region:${category}`).setPlaceholder('Choose your region').addOptions({label:'EU',value:'EU',description:'European support team'},{label:'NA',value:'NA',description:'North American support team'});
+      return i.update({components:[new ActionRowBuilder().addComponents(regionMenu)]});
+    }
+    if (i.isStringSelectMenu() && i.customId.startsWith('ticket_region:')) {
+      const category=i.customId.split(':')[1],region=i.values[0];
+      const modal=new ModalBuilder().setCustomId(`ticket_modal:${category}:${region}`).setTitle(`${region} support ticket`);
+      const question=new TextInputBuilder().setCustomId('question').setLabel('How can we help?').setStyle(TextInputStyle.Paragraph).setPlaceholder('Tell us what happened and include your server/player details.').setRequired(true).setMaxLength(1800);
+      return i.showModal(modal.addComponents(new ActionRowBuilder().addComponents(question)));
+    }
+    if (i.isModalSubmit() && i.customId.startsWith('ticket_modal:')) {
+      const [,category,region]=i.customId.split(':'), question=i.fields.getTextInputValue('question'), guild=i.guild;
+      const safeName=`${region.toLowerCase()}-${i.user.username}`.toLowerCase().replace(/[^a-z0-9-]/g,'').slice(0,70);
+      const channel=await guild.channels.create({name:`ticket-${safeName}`,type:ChannelType.GuildText,topic:`${BRAND} | ${region} | ${category} | ${i.user.id}`,permissionOverwrites:[{id:guild.roles.everyone.id,deny:[PermissionsBitField.Flags.ViewChannel]},{id:i.user.id,allow:[PermissionsBitField.Flags.ViewChannel,PermissionsBitField.Flags.SendMessages,PermissionsBitField.Flags.ReadMessageHistory]},{id:guild.members.me.id,allow:[PermissionsBitField.Flags.ViewChannel,PermissionsBitField.Flags.SendMessages,PermissionsBitField.Flags.ManageChannels]}]});
+      const id=randomUUID(); db.prepare('INSERT INTO tickets VALUES (?,?,?,?,?,?,?,?,?,?)').run(id,guild.id,channel.id,i.user.id,region,category,question,'open',new Date().toISOString(),null);
+      const close=new ButtonBuilder().setCustomId(`ticket_close:${id}`).setLabel('Close ticket').setStyle(ButtonStyle.Danger);
+      await channel.send({content:`<@${i.user.id}>`,embeds:[new EmbedBuilder().setColor(0x8b5cf6).setTitle('Support Ticket').setDescription(question).addFields({name:'Region',value:region,inline:true},{name:'Category',value:category,inline:true}).setFooter({text:BRAND})],components:[new ActionRowBuilder().addComponents(close)]});
+      return i.reply({content:`Your ${region} support ticket is open: ${channel}`,ephemeral:true});
+    }
+    if (i.isButton() && i.customId.startsWith('ticket_close:')) { const id=i.customId.split(':')[1]; db.prepare('UPDATE tickets SET status=\'closed\',closed_at=? WHERE id=?').run(new Date().toISOString(),id); await i.reply({content:'Ticket closed. This channel will be removed in 5 seconds.',ephemeral:true}); setTimeout(()=>i.channel?.delete().catch(()=>{}),5000); return; }
+    if (!i.isChatInputCommand()) return;
     if (i.commandName === 'help') return reply(i, 'RCE Bot Command Centre', 'Free, original Rust Console Edition community tooling.', [{name:'Core',value:'/server · /console · /config'},{name:'Community',value:'/clan · /leaderboard · /vip'},{name:'Gameplay',value:'/event · /kit · /home'}]);
     if (i.commandName === 'server') { if(i.options.getSubcommand()==='add'){const n=i.options.getString('name'),h=i.options.getString('host'),p=i.options.getInteger('port'),s=i.options.getString('secret'); db.prepare('INSERT INTO servers VALUES (?,?,?,?,?,1)').run(randomUUID(),i.guildId,n,h,p,s); return reply(i,'Server added',`**${n}** is saved. RCON execution is kept behind the adapter boundary.`);} const rows=db.prepare('SELECT name,host,port FROM servers WHERE guild_id=?').all(i.guildId); return reply(i,'Configured servers',rows.length?rows.map(r=>`• **${r.name}** — ${r.host}:${r.port}`).join('\n'):'No servers configured yet.'); }
     if (i.commandName === 'clan') { const sub=i.options.getSubcommand(); if(sub==='create'){const name=i.options.getString('name'),tag=i.options.getString('tag'); const id=randomUUID(); db.prepare('INSERT INTO clans VALUES (?,?,?,?,?,?)').run(id,i.guildId,name,tag,i.user.id,new Date().toISOString()); db.prepare('INSERT INTO clan_members VALUES (?,?,?)').run(id,i.user.id,'owner'); return reply(i,'Clan created',`**[${tag}] ${name}** is ready.`);} const c=db.prepare('SELECT c.* FROM clans c JOIN clan_members m ON m.clan_id=c.id WHERE c.guild_id=? AND m.user_id=?').get(i.guildId,i.user.id); return reply(i,'Clan info',c?`**[${c.tag}] ${c.name}**\nOwner: <@${c.owner_id}>`:'You are not in a clan.'); }
@@ -68,6 +101,8 @@ client.on('interactionCreate', async i => {
     if (i.commandName === 'announcement') return reply(i,'Announcement ready',i.options.getString('message'));
     if (i.commandName === 'automod') { const enabled=i.options.getBoolean('enabled')?1:0,words=i.options.getString('blocked_words')||''; db.prepare('INSERT OR REPLACE INTO automod VALUES (?,?,?)').run(i.guildId,enabled,words); return reply(i,'Automod updated',enabled?`Enabled. Blocked words configured: ${words?words.split(',').length:0}.`:'Disabled.'); }
     if (i.commandName === 'maintenance') return reply(i,'Maintenance mode','Maintenance status is community-specific and will be connected to the server adapter when available.');
+    if (i.commandName === 'ticket-panel') return i.reply(ticketPanel());
+    if (i.commandName === 'tickets') { const total=db.prepare("SELECT COUNT(*) AS n FROM tickets WHERE guild_id=? AND status='open'").get(i.guildId).n; const eu=db.prepare("SELECT COUNT(*) AS n FROM tickets WHERE guild_id=? AND status='open' AND region='EU'").get(i.guildId).n; const na=db.prepare("SELECT COUNT(*) AS n FROM tickets WHERE guild_id=? AND status='open' AND region='NA'").get(i.guildId).n; return reply(i,'Support Status',`Open Tickets (Total): ${total}\nOpen EU Tickets: ${eu}\nOpen NA Tickets: ${na}\nResponse Speed: Fast\nEstimated Help Time: 12 mins`,[{name:'Brand',value:BRAND}]); }
     return reply(i,'Module ready','This command is scaffolded and ready for its Rust Console server adapter.');
   } catch(e) { log.error(e); if(!i.replied) await i.reply({content:'Command failed. Check the bot logs.',ephemeral:true}); }
 });
