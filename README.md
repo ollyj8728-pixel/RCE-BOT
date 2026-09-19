@@ -14,6 +14,17 @@ An original, free, public Discord bot foundation for Rust Console Edition commun
 - `/kit give`
 - `/vip add|list`
 - `/config`
+- `/setup`
+- `/player info|stats`
+- `/zone create|list|delete`
+- `/logs`
+- `/announcement`
+- `/automod`
+- `/maintenance`
+
+## Railway deployment
+
+See `RAILWAY.md`. Use `npm start`, set `DISCORD_TOKEN`, `DISCORD_CLIENT_ID`, and a persistent `DB_PATH` such as `/data/rce-bot.sqlite`.
 
 ## Important status
 
