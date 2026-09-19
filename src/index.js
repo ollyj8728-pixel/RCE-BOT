@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 import net from 'node:net';
 import { BOT_CONFIG } from './config.js';
 import { SAFE_RUST_COMMANDS, CONTROLLED_RUST_COMMANDS, RUST_COMMAND_CATALOG } from './rust-command-catalog.js';
+import { FIRST_RELEASE_COMMANDS, FIRST_RELEASE_SUBCOMMANDS } from './first-release-commands.js';
 
 const log = pino({ level: process.env.LOG_LEVEL || 'info' });
 const required = ['DISCORD_TOKEN', 'DISCORD_CLIENT_ID'];
@@ -16,6 +17,7 @@ const guildId = process.env.DISCORD_GUILD_ID?.trim();
 if (!/^\d{17,20}$/.test(clientId)) throw new Error('DISCORD_CLIENT_ID must be the numeric Discord Application ID.');
 if (guildId && !/^\d{17,20}$/.test(guildId)) throw new Error('DISCORD_GUILD_ID must be the numeric Discord Server ID.');
 log.info({clientId, guildId: guildId || null, node: process.version}, 'Railway configuration loaded (token hidden)');
+
 
 const db = new Database(process.env.DB_PATH || './rce-bot.sqlite');
 db.pragma('journal_mode = WAL');
@@ -37,6 +39,7 @@ CREATE TABLE IF NOT EXISTS tickets (id TEXT PRIMARY KEY, guild_id TEXT NOT NULL,
 CREATE TABLE IF NOT EXISTS ticket_panels (guild_id TEXT NOT NULL, channel_id TEXT NOT NULL, message_id TEXT NOT NULL, PRIMARY KEY(guild_id,channel_id,message_id));
 CREATE TABLE IF NOT EXISTS setup_progress (guild_id TEXT PRIMARY KEY, roles_done INTEGER NOT NULL DEFAULT 0, logs_done INTEGER NOT NULL DEFAULT 0, server_done INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS setup_roles (guild_id TEXT NOT NULL, role_type TEXT NOT NULL, role_id TEXT NOT NULL, PRIMARY KEY(guild_id,role_type));
+
 CREATE TABLE IF NOT EXISTS kit_settings (guild_id TEXT PRIMARY KEY, channel_id TEXT, configured_by TEXT, configured_at TEXT);
 CREATE TABLE IF NOT EXISTS kits (id TEXT PRIMARY KEY, guild_id TEXT NOT NULL, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', cooldown_hours INTEGER NOT NULL DEFAULT 24, created_by TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(guild_id,name));
 CREATE TABLE IF NOT EXISTS kit_claims (guild_id TEXT NOT NULL, kit_id TEXT NOT NULL, user_id TEXT NOT NULL, claimed_at TEXT NOT NULL, PRIMARY KEY(guild_id,kit_id,user_id));
@@ -47,10 +50,17 @@ CREATE TABLE IF NOT EXISTS economy_shop (id TEXT PRIMARY KEY, guild_id TEXT NOT 
 CREATE TABLE IF NOT EXISTS pending_player_actions (id TEXT PRIMARY KEY, guild_id TEXT NOT NULL, action TEXT NOT NULL, player TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending_adapter', actor_id TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS wipe_requests (id TEXT PRIMARY KEY, guild_id TEXT NOT NULL, requested_by TEXT NOT NULL, confirmation TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending_adapter', announcement TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS wipe_configs (guild_id TEXT PRIMARY KEY, channel_id TEXT, server_name TEXT NOT NULL DEFAULT '', wipe_at TEXT NOT NULL, latest_wipe_at TEXT, announcement TEXT NOT NULL DEFAULT '', image_url TEXT NOT NULL DEFAULT '', configured_by TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS local_links (guild_id TEXT NOT NULL, user_id TEXT NOT NULL, player TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(guild_id,user_id));
+CREATE TABLE IF NOT EXISTS local_profiles (guild_id TEXT NOT NULL, user_id TEXT NOT NULL, field TEXT NOT NULL, value TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(guild_id,user_id,field));
+CREATE TABLE IF NOT EXISTS recruit_posts (id TEXT PRIMARY KEY, guild_id TEXT NOT NULL, user_id TEXT NOT NULL, message TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open', created_at TEXT NOT NULL, closed_at TEXT);
+CREATE TABLE IF NOT EXISTS local_reports (id TEXT PRIMARY KEY, guild_id TEXT NOT NULL, reporter_id TEXT NOT NULL, subject TEXT NOT NULL, details TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS local_clan_meta (clan_id TEXT PRIMARY KEY, emblem TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS confirmations (id TEXT PRIMARY KEY, guild_id TEXT NOT NULL, actor_id TEXT NOT NULL, action TEXT NOT NULL, target TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL);
 `);
 // Keep migrations idempotent and execute each ALTER independently.
 const serverColumns = new Set(db.prepare('PRAGMA table_info(servers)').all().map(column => column.name));
 const serverMigrations = [
+
   ['region', "ALTER TABLE servers ADD COLUMN region TEXT NOT NULL DEFAULT 'EU'"],
   ['description', "ALTER TABLE servers ADD COLUMN description TEXT NOT NULL DEFAULT ''"],
   ['notes', "ALTER TABLE servers ADD COLUMN notes TEXT NOT NULL DEFAULT ''"],
@@ -61,7 +71,7 @@ for (const [column, migration] of serverMigrations) if (!serverColumns.has(colum
 
 
 const STAFF_ROLE_TYPES = ['owner','co_owner','head_admin','admin','moderator'];
-const OPEN_BEFORE_SERVER = new Set(['help','setup','server','ticket-panel','tickets','kits','clan','event','leaderboard','home','kit','vip','schedule-message','config','player','zone','logs','announcement','automod','maintenance','wipe','monitor']);
+const OPEN_BEFORE_SERVER = new Set(['help','setup','server','ticket-panel','tickets','kits','clan','event','leaderboard','home','kit','vip','schedule-message','config','player','zone','logs','announcement','automod','maintenance','wipe','monitor','dashboard','bot-status','settings','link','link-status','unlink','profile','recruit','ticket','report','staff','rates','wipe-reminder']);
 const getSetupState = guildId => db.prepare('SELECT roles_done,logs_done,server_done FROM setup_progress WHERE guild_id=?').get(guildId) || {roles_done:0,logs_done:0,server_done:0};
 const isStaff = interaction => { if (!interaction.member) return false; if (interaction.member.permissions?.has(PermissionFlagsBits.Administrator) || interaction.member.permissions?.has(PermissionFlagsBits.ManageGuild)) return true; const roleIds = new Set((interaction.member.roles?.cache ? [...interaction.member.roles.cache.keys()] : []).map(String)); const configured = db.prepare(`SELECT role_id FROM setup_roles WHERE guild_id=? AND role_type IN (${STAFF_ROLE_TYPES.map(()=>'?').join(',')})`).all(interaction.guildId,...STAFF_ROLE_TYPES); return configured.some(r=>roleIds.has(String(r.role_id))); };
 const getOnlineServer = guildId => db.prepare("SELECT * FROM servers WHERE guild_id=? AND enabled=1 AND status='online' AND last_checked IS NOT NULL AND last_checked >= datetime('now','-2 minutes') ORDER BY last_checked DESC LIMIT 1").get(guildId);
@@ -71,13 +81,14 @@ const requireReadyServer = async interaction => { const setup=getSetupState(inte
 const SETUP_STEPS = new Set(['roles','logs','server']);
 const validText = (value, max=100) => typeof value === 'string' && value.trim().length > 0 && value.trim().length <= max;
 const tcpStatus = server => new Promise(resolve => { const socket=net.createConnection({host:server.host,port:server.port}); let done=false; const finish=(status,detail='')=>{ if(done)return; done=true; socket.destroy(); resolve({status,detail}); }; socket.setTimeout(4000,()=>finish('offline','Connection timed out')); socket.once('connect',()=>finish('online','TCP connection accepted')); socket.once('error',error=>finish('offline', error.code === 'ECONNREFUSED' ? 'Connection refused' : 'TCP connection failed')); });
+
 const pendingAdapter = subject => `${subject}\n\n**Status:** pending adapter. No live Rust action was performed because no authenticated provider adapter is configured.`;
 
 const SAFE_CONSOLE_ACTIONS = new Set(['players','playerlistids','listid','banlistex','printpos','getbuildinginfo','global.players','global.playerlistids','global.listid','global.banlistex','chat.enabled','writecfg','env.time','weather.rain','adminclouds','adminfog','adminwind',...SAFE_RUST_COMMANDS]);
 const CONTROLLED_CONSOLE_ACTIONS = new Set(CONTROLLED_RUST_COMMANDS);
 const commands = [
   new SlashCommandBuilder().setName('help').setDescription('Show all RCE bot modules'),
-  new SlashCommandBuilder().setName('server').setDescription('Manage and test Rust Console servers').addSubcommand(s=>s.setName('list').setDescription('List configured servers')).addSubcommand(s=>s.setName('add').setDescription('Add a server').addStringOption(o=>o.setName('name').setDescription('Display name').setRequired(true)).addStringOption(o=>o.setName('host').setDescription('RCON/API host').setRequired(true)).addIntegerOption(o=>o.setName('port').setDescription('RCON/API port').setRequired(true)).addStringOption(o=>o.setName('secret').setDescription('Private RCON secret').setRequired(true)).addStringOption(o=>o.setName('region').setDescription('Server region').setRequired(true).addChoices({name:'EU',value:'EU'},{name:'NA',value:'NA'})).addStringOption(o=>o.setName('description').setDescription('Server description')).addStringOption(o=>o.setName('notes').setDescription('Setup notes'))).addSubcommand(s=>s.setName('test').setDescription('Test TCP reachability for a configured server').addStringOption(o=>o.setName('name').setDescription('Server name').setRequired(true))),
+  new SlashCommandBuilder().setName('server').setDescription('Manage and test Rust Console servers').addSubcommand(s=>s.setName('list').setDescription('List configured servers')).addSubcommand(s=>s.setName('add').setDescription('Add a server').addStringOption(o=>o.setName('name').setDescription('Display name').setRequired(true)).addStringOption(o=>o.setName('host').setDescription('RCON/API host').setRequired(true)).addIntegerOption(o=>o.setName('port').setDescription('RCON/API port').setRequired(true)).addStringOption(o=>o.setName('secret').setDescription('Private RCON secret').setRequired(true)).addStringOption(o=>o.setName('region').setDescription('Server region').setRequired(true).addChoices({name:'EU',value:'EU'},{name:'NA',value:'NA'})).addStringOption(o=>o.setName('description').setDescription('Server description')).addStringOption(o=>o.setName('notes').setDescription('Setup notes'))).addSubcommand(s=>s.setName('test').setDescription('Test TCP reachability for a configured server').addStringOption(o=>o.setName('name').setDescription('Server name').setRequired(true))).addSubcommand(s=>s.setName('dashboard').setDescription('Show cached server dashboard')).addSubcommand(s=>s.setName('info').setDescription('Show cached server information')).addSubcommand(s=>s.setName('players').setDescription('Show cached players; adapter pending')),
   new SlashCommandBuilder().setName('console').setDescription('Run a command on a configured RCON server').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild).addStringOption(o=>o.setName('command').setDescription('Console command').setRequired(true)).addStringOption(o=>o.setName('server').setDescription('Server name').setRequired(true)),
   new SlashCommandBuilder().setName('clan').setDescription('Clan system').addSubcommand(s=>s.setName('create').setDescription('Create a clan').addStringOption(o=>o.setName('name').setDescription('Clan name').setRequired(true)).addStringOption(o=>o.setName('tag').setDescription('Short tag').setRequired(true))).addSubcommand(s=>s.setName('info').setDescription('View your clan')).addSubcommand(s=>s.setName('invite').setDescription('Invite a member').addUserOption(o=>o.setName('user').setDescription('Member').setRequired(true))).addSubcommand(s=>s.setName('leave').setDescription('Leave clan')).addSubcommand(s=>s.setName('promote').setDescription('Promote member').addUserOption(o=>o.setName('user').setDescription('Member').setRequired(true))),
   new SlashCommandBuilder().setName('event').setDescription('Events: Nuketown, KOTH, Maze, Snowroams and more').addSubcommand(s=>s.setName('start').setDescription('Start an event').addStringOption(o=>o.setName('type').setDescription('Event type').setRequired(true).addChoices(...['Nuketown','KOTH','Maze','Snowroams','Custom'].map(x=>({name:x,value:x.toLowerCase()}))))).addSubcommand(s=>s.setName('list').setDescription('List active events')).addSubcommand(s=>s.setName('end').setDescription('End an event').addStringOption(o=>o.setName('id').setDescription('Event ID').setRequired(true))),
@@ -91,6 +102,7 @@ const commands = [
   new SlashCommandBuilder().setName('anticheat').setDescription('Configure safe anticheat monitoring').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild).addSubcommand(s=>s.setName('config').setDescription('Configure monitoring').addBooleanOption(o=>o.setName('enabled').setDescription('Enable monitoring').setRequired(true)).addStringOption(o=>o.setName('mode').setDescription('Mode').setRequired(true).addChoices({name:'Monitor',value:'monitor'},{name:'Review queue',value:'review'}))),
   new SlashCommandBuilder().setName('economy').setDescription('Community economy').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild).addSubcommand(s=>s.setName('balance').setDescription('View balance').addUserOption(o=>o.setName('user').setDescription('User'))).addSubcommand(s=>s.setName('add').setDescription('Add credits').addUserOption(o=>o.setName('user').setDescription('User').setRequired(true)).addIntegerOption(o=>o.setName('amount').setDescription('Credits').setRequired(true).setMinValue(1))).addSubcommand(s=>s.setName('shop').setDescription('List shop items')),
   new SlashCommandBuilder().setName('player-manage').setDescription('Record player moderation action').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild).addSubcommand(s=>s.setName('kick').setDescription('Queue kick').addStringOption(o=>o.setName('player').setDescription('Player').setRequired(true)).addStringOption(o=>o.setName('reason').setDescription('Reason'))).addSubcommand(s=>s.setName('ban').setDescription('Queue ban').addStringOption(o=>o.setName('player').setDescription('Player').setRequired(true)).addStringOption(o=>o.setName('reason').setDescription('Reason'))),
+
   new SlashCommandBuilder().setName('server-wipe').setDescription('Prepare guarded wipe request').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild).addStringOption(o=>o.setName('confirmation').setDescription('Type WIPE_CONFIRMATION exactly').setRequired(true)).addStringOption(o=>o.setName('announcement').setDescription('Optional announcement')),
     new SlashCommandBuilder().setName('wipe').setDescription('Configure Valora wipe announcements').addSubcommand(s=>s.setName('config').setDescription('Configure wipe announcement').addStringOption(o=>o.setName('server').setDescription('Displayed server name').setRequired(true)).addStringOption(o=>o.setName('wipe_at').setDescription('ISO date/time').setRequired(true)).addStringOption(o=>o.setName('latest_wipe').setDescription('Previous ISO date/time')).addStringOption(o=>o.setName('channel').setDescription('Announcement channel ID')).addStringOption(o=>o.setName('message').setDescription('Server information')).addStringOption(o=>o.setName('image_url').setDescription('Banner image URL'))).addSubcommand(s=>s.setName('info').setDescription('Show wipe configuration')).addSubcommand(s=>s.setName('announcement').setDescription('Preview wipe announcement')),
   new SlashCommandBuilder().setName('monitor').setDescription('Safe server monitor').addSubcommand(s=>s.setName('status').setDescription('Show status')),
@@ -106,6 +118,11 @@ const commands = [
   new SlashCommandBuilder().setName('ticket-panel').setDescription('Post the Valora RCE Bot support ticket panel').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
   new SlashCommandBuilder().setName('tickets').setDescription('Show support ticket status').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
 ].map(c=>c.toJSON());
+// Merge first-release subcommands without duplicate Discord names.
+const mergeOptions=(existing=[],additions=[])=>{const merged=[...existing];for(const addition of additions){const current=merged.find(option=>option.name===addition.name);if(!current)merged.push(addition);else if(Array.isArray(addition.options)&&Array.isArray(current.options))current.options=mergeOptions(current.options,addition.options);}return merged;};
+for(const [name] of Object.entries(FIRST_RELEASE_SUBCOMMANDS)){const command=commands.find(item=>item.name===name);const additions=FIRST_RELEASE_COMMANDS.find(item=>item.name===name)?.options||[];if(command)command.options=mergeOptions(command.options,additions);}
+for(const command of FIRST_RELEASE_COMMANDS)if(!commands.some(existing=>existing.name===command.name))commands.push(command);
+
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildMessages] });
 const BRAND = 'Valora RCE Bot';
@@ -127,6 +144,7 @@ const ticketPanel = (guildId) => {
     {label:'Ticket Bug',value:'bug',description:'In-game or bot bugs and glitches',emoji:'🐛'}
   );
   return {embeds:[brandEmbed(new EmbedBuilder().setColor(0x7c3aed).setTitle('📩 Valora - Support').setDescription('For any issue you encounter or questions you have plz select one of the following choices.\n\nIf you are looking for the commands list | how they work, do `/help`. This will provide you the full list of commands and make response time quicker!').addFields({name:'📄 Ticket General',value:'For any request or question that is not specified in the following categories.'},{name:'🏠 Ticket Base',value:'Any questions or problems related to your base or your area can be discussed in this ticket.'},{name:'👥 Ticket Clan',value:'Ticket made to respond to clan requests or possible specific problems.'},{name:'💎 Ticket Shop',value:'Information about our online store or any product.'},{name:'⚠️ Ticket Raid',value:'Ticket made for bounty raid or raid-related problems.'},{name:'🐛 Ticket Bug',value:'For any bug/glitch found in-game or with our bots.'},{name:'📊 Support Status',value:`**Open Tickets (Total):** ${total}\n**Open EU Tickets:** ${eu}\n**Open NA Tickets:** ${na}\n**Response Speed:** ⚡ Fast\n**Estimated Help Time:** ⏱️ 12 mins`}).setFooter({text:'Support - Valora 5x [EU] • 2026'}).setTimestamp())],components:[new ActionRowBuilder().addComponents(menu)]};
+
 };
 const refreshTicketPanels = async (guildId) => {
   const rows=db.prepare('SELECT channel_id,message_id FROM ticket_panels WHERE guild_id=?').all(guildId);
@@ -147,6 +165,7 @@ const setupRolesPanel = (guildId, step=1) => {
   const roles=[...client.guilds.cache.get(guildId)?.roles.cache.values()||[]].filter(r=>r.id!==guildId&&!r.managed&&!used.has(r.id)).slice(0,25);
   const roleMenu=new StringSelectMenuBuilder().setCustomId(`setup_role_select:${step}`).setPlaceholder('Select a role…').addOptions(roles.length?roles.map(r=>({label:r.name.slice(0,100),value:r.id,description:`Use ${r.name} as ${current.name} Role`})):[{label:'No roles found',value:'none',description:'Use Auto-Create to make the role'}]);
   const auto=new ButtonBuilder().setCustomId(`setup_role_auto:${step}`).setLabel('Auto-Create').setEmoji('✨').setStyle(ButtonStyle.Primary);
+
   const find=new ButtonBuilder().setCustomId(`setup_role_find:${step}`).setLabel('Find a role').setEmoji('🔎').setStyle(ButtonStyle.Secondary);
   const components=[new ActionRowBuilder().addComponents(roleMenu),new ActionRowBuilder().addComponents(find,auto)];
   if(current.skip) components[1].addComponents(new ButtonBuilder().setCustomId(`setup_role_skip:${step}`).setLabel('Skip').setEmoji('⏭️').setStyle(ButtonStyle.Secondary));
@@ -167,6 +186,7 @@ client.once('ready', async () => {
     } else {
       await rest.put(Routes.applicationCommands(applicationId), {body:commands});
       // Remove stale guild-scoped copies where the bot can see the guild; this prevents
+
       // old guild registrations from shadowing the canonical global command set.
       await Promise.all([...client.guilds.cache.keys()].map(id => rest.put(Routes.applicationGuildCommands(applicationId, id), {body:[]})));
       log.info({commandCount:commands.length,clearedGuilds:client.guilds.cache.size}, 'Slash commands registered globally and guild duplicates removed');
@@ -187,6 +207,7 @@ client.on('interactionCreate', async i => {
       const category=i.values[0];
       const regionMenu=new StringSelectMenuBuilder().setCustomId(`ticket_region:${category}`).setPlaceholder('Choose your region').addOptions({label:'EU',value:'EU',description:'European support team'},{label:'NA — COMING SOON',value:'NA',description:'North American tickets are coming soon'});
       return i.update({components:[new ActionRowBuilder().addComponents(regionMenu)]});
+
     }
     if (i.isStringSelectMenu() && i.customId.startsWith('ticket_region:')) {
       const category=i.customId.split(':')[1],region=i.values[0];
@@ -207,6 +228,7 @@ client.on('interactionCreate', async i => {
       const close=new ButtonBuilder().setCustomId(`ticket_close:${id}`).setLabel('Close ticket').setStyle(ButtonStyle.Danger);
       await channel.send({content:`<@${i.user.id}>`,embeds:[new EmbedBuilder().setColor(0x8b5cf6).setTitle('🎫 Valora RCE Support Ticket').setDescription('Thanks for contacting Valora RCE Bot. A support team member will review your request and reply here.').addFields({name:'🌍 Region',value:region,inline:true},{name:'🧩 Category',value:category,inline:true},{name:'🔗 Link name',value:linkName,inline:true},{name:'⚠️ What is wrong?',value:issue},{name:'📝 Full request',value:details.slice(0,1000)}).setFooter({text:BRAND})],components:[new ActionRowBuilder().addComponents(close)]});
       await refreshTicketPanels(guild.id); return i.reply({content:`✅ Your ${region} support ticket is open: ${channel}`,ephemeral:true});
+
     }
     if (i.isButton() && i.customId === 'nav_help') return i.reply({content:'Use `/help` any time to reopen the Valora RCE Bot command guide.',ephemeral:true});
     if (i.isStringSelectMenu() && i.customId.startsWith('setup_role_select:')) { const step=Number(i.customId.split(':')[1]), roleId=i.values[0], current=ROLE_STEPS[step]; if(roleId==='none') return i.reply({content:'No unused role is available. Use Auto-Create to make a new one.',ephemeral:true}); const already=db.prepare('SELECT role_type FROM setup_roles WHERE guild_id=? AND role_id=?').get(i.guildId,roleId); if(already) return i.reply({content:'That role is already assigned to another setup slot. Choose a different role.',ephemeral:true}); db.prepare('INSERT OR REPLACE INTO setup_roles VALUES (?,?,?)').run(i.guildId,current.key,roleId); db.prepare('INSERT OR IGNORE INTO setup_progress (guild_id) VALUES (?)').run(i.guildId); if(step<6) return i.update(setupRolesPanel(i.guildId,step+1)); db.prepare('UPDATE setup_progress SET roles_done=1 WHERE guild_id=?').run(i.guildId); return i.update(rolesSavedPanel()); }
@@ -221,16 +243,75 @@ client.on('interactionCreate', async i => {
     if (i.isButton() && i.customId === 'nav_ticket') return i.reply({content:'Use `/ticket-panel` in your support channel to publish the support panel.',ephemeral:true});
     if (i.isButton() && i.customId.startsWith('ticket_close:')) { const id=i.customId.split(':')[1]; if (!i.guildId || !i.channelId || !(await requireStaff(i))) return; const ticket=db.prepare('SELECT * FROM tickets WHERE id=? AND guild_id=? AND channel_id=?').get(id,i.guildId,i.channelId); if (!ticket) return i.reply({content:'This ticket is invalid or belongs to another server/channel.',ephemeral:true}); if (ticket.status !== 'open') return i.reply({content:'This ticket is already closed.',ephemeral:true}); db.prepare("UPDATE tickets SET status='closed',closed_at=? WHERE id=? AND guild_id=? AND channel_id=? AND status='open'").run(new Date().toISOString(),id,i.guildId,i.channelId); audit(i.guildId,i.user.id,'ticket.closed',id); await refreshTicketPanels(i.guildId); await i.reply({content:'✅ Ticket closed. This channel will be removed in 5 seconds.',ephemeral:true}); setTimeout(()=>i.channel?.delete().catch(()=>{}),5000); return; }
     if (!i.isChatInputCommand()) return;
-    if (['setup','server','ticket-panel','kits','config','logs','announcement','automod','maintenance','schedule-message','schedule','zone','tickets'].includes(i.commandName) && !(await requireStaff(i))) return; if (!OPEN_BEFORE_SERVER.has(i.commandName) && !(await requireReadyServer(i))) return;
+    if (['setup','server','ticket-panel','kits','config','logs','announcement','automod','maintenance','schedule-message','schedule','zone','tickets','wipe'].includes(i.commandName) && !(await requireStaff(i))) return; if (!OPEN_BEFORE_SERVER.has(i.commandName) && !(await requireReadyServer(i))) return;
     if (i.commandName === 'help') return i.reply({embeds:[new EmbedBuilder().setColor(0x7c3aed).setTitle('⚡ Valora RCE Bot').setDescription('Your all-in-one Rust Console community control centre. Every feature is separated per Discord server and protected by permissions.').addFields({name:'🛠️ Server Control',value:'`/server` — add and view servers\n`/console` — authorized management actions\n`/maintenance` — service status'},{name:'🎫 Community Support',value:'`/ticket-panel` — publish the support panel\n`/tickets` — live EU/NA ticket status\n`/announcement` — post community updates'},{name:'👥 Community Systems',value:'`/clan` — create and manage clans\n`/player` — player records and stats\n`/leaderboard` — kills, playtime, and events\n`/vip` — community VIP records'},{name:'🎮 Gameplay Tools',value:'`/event` — Nuketown, KOTH, Maze, Snowroams\n`/home` — save and manage homes\n`/kit` — kit requests\n`/zone` — custom zone records'},{name:'🔧 Admin & Automation',value:'`/setup` · `/config` · `/logs` · `/automod` · `/schedule`'}).setFooter({text:`${BRAND} • Choose a command from the Discord menu`}).setTimestamp()],components:[commandNav()]});
-    if (i.commandName === 'server') { const sub=i.options.getSubcommand(); if(sub==='list'){ const rows=db.prepare('SELECT name,host,port,region,status,last_checked,description FROM servers WHERE guild_id=? ORDER BY name').all(i.guildId); return reply(i,'Configured servers',rows.length?rows.map(r=>`• **${r.name}** [${r.region}] — ${r.status} (${r.host}:${r.port})`).join('\n'):'No servers configured. Use `/server add`.'); } if(sub==='add'){ const name=i.options.getString('name').trim(),host=i.options.getString('host').trim(),port=i.options.getInteger('port'),secret=i.options.getString('secret'),region=i.options.getString('region'),description=i.options.getString('description')||'',notes=i.options.getString('notes')||''; if(!validText(name,80)||!validText(host,253)||!validText(secret,500)||port<1||port>65535) return reply(i,'Invalid server details','Name, host, secret, and port must be valid.'); if(!/^[a-zA-Z0-9.-]+$/.test(host)) return reply(i,'Invalid host','Use a hostname or IP address only.'); try { db.prepare('INSERT INTO servers (id,guild_id,name,host,port,rcon_secret,region,description,notes,status) VALUES (?,?,?,?,?,?,?,?,?,?)').run(randomUUID(),i.guildId,name,host,port,secret,region,description.slice(0,500),notes.slice(0,500),'pending'); audit(i.guildId,i.user.id,'server.added',name); return reply(i,'Server saved','Configuration saved. Run `/server test` to perform a TCP reachability check; the secret is never displayed.'); } catch(e) { if(e.code==='SQLITE_CONSTRAINT_UNIQUE') return reply(i,'Server already exists','Choose a different server name.'); throw e; } } const name=i.options.getString('name'); const server=db.prepare('SELECT * FROM servers WHERE guild_id=? AND name=? AND enabled=1').get(i.guildId,name); if(!server) return reply(i,'Server not found','Use `/server list` to see configured server names.'); const result=await tcpStatus(server); db.prepare('UPDATE servers SET status=?,last_checked=? WHERE id=? AND guild_id=?').run(result.status,new Date().toISOString(),server.id,i.guildId); return reply(i,result.status==='online'?'Server reachable':'Server unreachable',`**${server.name}** TCP status: **${result.status}**\n${result.detail}\n\nThis checks TCP only; it does not authenticate RCON or execute commands.`); }
-    if (i.commandName === 'clan') { const sub=i.options.getSubcommand(); if(sub==='create'){const name=i.options.getString('name').trim(),tag=i.options.getString('tag').trim().toUpperCase(); if(!validText(name,20)||!/^[A-Z0-9]{2,6}$/.test(tag)) return reply(i,'Invalid clan','Name must be 1–20 characters and tag must be 2–6 letters/numbers.'); if(db.prepare('SELECT 1 FROM clans c JOIN clan_members m ON m.clan_id=c.id WHERE c.guild_id=? AND m.user_id=?').get(i.guildId,i.user.id)) return reply(i,'Already in a clan','Leave your current clan first.'); const id=randomUUID(); db.prepare('INSERT INTO clans VALUES (?,?,?,?,?,?)').run(id,i.guildId,name,tag,i.user.id,new Date().toISOString()); db.prepare('INSERT INTO clan_members VALUES (?,?,?)').run(id,i.user.id,'owner'); audit(i.guildId,i.user.id,'clan.created',name); return reply(i,'Clan created',`**${name}** [${tag}] created locally.`); } if(sub==='info'){const c=db.prepare('SELECT c.*,COUNT(m.user_id) AS members FROM clans c JOIN clan_members m ON m.clan_id=c.id WHERE c.guild_id=? AND m.user_id=? GROUP BY c.id').get(i.guildId,i.user.id); return reply(i,'Clan info',c?`**${c.name}** [${c.tag}]\nOwner: <@${c.owner_id}>\nMembers: ${c.members}`:'You are not in a clan.'); } if(sub==='invite'){const c=db.prepare("SELECT c.* FROM clans c JOIN clan_members m ON m.clan_id=c.id WHERE c.guild_id=? AND m.user_id=? AND m.role IN ('owner','officer')").get(i.guildId,i.user.id); const u=i.options.getUser('user'); if(!c)return reply(i,'Clan owner/officer required','Only clan owners and officers can invite.'); if(db.prepare('SELECT 1 FROM clan_members WHERE clan_id=? AND user_id=?').get(c.id,u.id))return reply(i,'Already a member','That user is already in the clan.'); db.prepare('INSERT INTO clan_members VALUES (?,?,?)').run(c.id,u.id,'member'); return reply(i,'Member added',`<@${u.id}> was added to **${c.name}** locally.`); } }
+
+
+    if (i.commandName === 'server') {
+      const sub = i.options.getSubcommand();
+
+      if (['dashboard','info','players'].includes(sub)) {
+        const rows = db.prepare('SELECT name,region,status,last_checked,description FROM servers WHERE guild_id=? AND enabled=1 ORDER BY name').all(i.guildId);
+        if (sub === 'players') return reply(i,'Server players','Player data is cached/adapter-pending. No live Rust query was performed.');
+        return reply(i, sub === 'dashboard' ? 'Server dashboard' : 'Server info', rows.length ? rows.map(r => `**${r.name}** [${r.region}] — ${r.status}${r.last_checked ? ` (checked ${r.last_checked})` : ''}${r.description ? `\n${r.description}` : ''}`).join('\n\n') : 'No servers configured.');
+      }
+    }
+    if (['dashboard','bot-status','rates','wipe-reminder'].includes(i.commandName)) {
+      const messages = { dashboard:'Valora command center: clans, tickets, staff review, server records, and wipe watch.', 'bot-status':'Valora is online at the command layer. Rust provider adapter: pending; no live actions are enabled.', rates:'No live rate feed is configured. Rates are unavailable until a trusted adapter is connected.', 'wipe-reminder':'Wipe reminders are local records only. No wipe or server action was performed.' };
+      return reply(i, `Valora ${i.commandName}`, messages[i.commandName]);
+    }
+    if (i.commandName === 'link') {
+      const player = i.options.getString('player').trim().slice(0,100), now = new Date().toISOString();
+      db.prepare('INSERT INTO local_links (guild_id,user_id,player,created_at,updated_at) VALUES (?,?,?,?,?) ON CONFLICT(guild_id,user_id) DO UPDATE SET player=excluded.player,updated_at=excluded.updated_at').run(i.guildId,i.user.id,player,now,now);
+      audit(i.guildId,i.user.id,'link.saved',player); return reply(i,'Local link saved',`Linked **${player}** locally. No Rust action was performed.`);
+    }
+    if (i.commandName === 'link-status' || i.commandName === 'unlink') {
+      const current = db.prepare('SELECT player FROM local_links WHERE guild_id=? AND user_id=?').get(i.guildId,i.user.id);
+      if (i.commandName === 'unlink') { db.prepare('DELETE FROM local_links WHERE guild_id=? AND user_id=?').run(i.guildId,i.user.id); audit(i.guildId,i.user.id,'link.removed'); return reply(i,'Link removed','Your local player link was removed.'); }
+      return reply(i,'Link status',current ? `Linked player: **${current.player}**` : 'No local player link is saved.');
+    }
+
+    if (i.commandName === 'profile') {
+      const sub=i.options.getSubcommand();
+      if (sub === 'view') { const rows=db.prepare('SELECT field,value FROM local_profiles WHERE guild_id=? AND user_id=? ORDER BY field').all(i.guildId,i.user.id); return reply(i,'Profile',rows.length ? rows.map(r=>`**${r.field}:** ${r.value}`).join('\n') : 'No profile fields saved.'); }
+      const field=i.options.getString('field').trim().toLowerCase(), value=i.options.getString('value').trim().slice(0,200);
+      if (!['name','pronouns','timezone'].includes(field)) return reply(i,'Invalid field','Use name, pronouns, or timezone.');
+      db.prepare('INSERT INTO local_profiles VALUES (?,?,?,?,?) ON CONFLICT(guild_id,user_id,field) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at').run(i.guildId,i.user.id,field,value,new Date().toISOString()); return reply(i,'Profile saved',`Saved **${field}** locally.`);
+    }
+    if (i.commandName === 'settings') return reply(i,'Valora settings','Settings are local and permission-aware. Use `/setup` for channels and roles. Secrets are never displayed.');
+    if (i.commandName === 'recruit') {
+      const sub=i.options.getSubcommand();
+      if (sub==='post') { const id=randomUUID().slice(0,8), now=new Date().toISOString(); db.prepare('INSERT INTO recruit_posts VALUES (?,?,?,?,?,?,?)').run(id,i.guildId,i.user.id,i.options.getString('message').trim().slice(0,500),'open',now,null); audit(i.guildId,i.user.id,'recruit.posted',id); return reply(i,'Recruitment post created',`Post ID: **${id}**`); }
+      if (sub==='list') { const rows=db.prepare("SELECT id,message FROM recruit_posts WHERE guild_id=? AND status='open' ORDER BY created_at DESC LIMIT 20").all(i.guildId); return reply(i,'Open recruitment posts',rows.length?rows.map(r=>`**${r.id}** — ${r.message}`).join('\n'):'No open posts.'); }
+      const id=i.options.getString('id').trim(), result=db.prepare("UPDATE recruit_posts SET status='closed',closed_at=? WHERE id=? AND guild_id=? AND user_id=? AND status='open'").run(new Date().toISOString(),id,i.guildId,i.user.id); return reply(i,result.changes?'Recruitment post closed':'Post not found','Only your open local post can be closed.');
+    }
+    if (i.commandName === 'report') {
+      const sub=i.options.getSubcommand();
+      if (sub==='create') { const id=randomUUID().slice(0,8), now=new Date().toISOString(); db.prepare('INSERT INTO local_reports VALUES (?,?,?,?,?,?,?,?)').run(id,i.guildId,i.user.id,i.options.getString('subject').trim().slice(0,100),i.options.getString('details').trim().slice(0,1000),'open',now,now); audit(i.guildId,i.user.id,'report.created',id); return reply(i,'Report created',`Local report ID: **${id}**. No moderation action was performed.`); }
+      if (!(await requireStaff(i))) return; const rows=db.prepare('SELECT id,subject,status,created_at FROM local_reports WHERE guild_id=? ORDER BY created_at DESC LIMIT 20').all(i.guildId); return reply(i,'Staff reports',rows.length?rows.map(r=>`**${r.id}** ${r.status} — ${r.subject}`).join('\n'):'No reports.');
+    }
+    if (i.commandName === 'staff') { if (!(await requireStaff(i))) return; const sub=i.options.getSubcommand(); if(sub==='audit-log'){const rows=db.prepare('SELECT action,target,created_at FROM audit_logs WHERE guild_id=? ORDER BY created_at DESC LIMIT 20').all(i.guildId); return reply(i,'Audit log',rows.length?rows.map(r=>`${r.created_at} — **${r.action}** ${r.target||''}`).join('\n'):'No audit records.');} return reply(i,'Staff command center','Local staff tools are ready. Live Rust actions remain adapter-pending.'); }
+
+    if (i.commandName === 'ticket') return reply(i,'Ticket Command','Use the existing `/ticket-panel` to open private support tickets.');
+    if (i.commandName === 'clan') return reply(i,'Clan Forge','Use the existing local clan commands. New clan management controls remain local-record only.');
     if (i.commandName === 'wipe') {
-      return reply(i,'Wipe configuration','Use `/wipe config` to configure the Valora wipe announcement.');
+      const sub=i.options.getSubcommand();
+      if (sub==='config') {
+        if (!(await requireStaff(i))) return;
+        const server=i.options.getString('server').trim(), wipeAt=i.options.getString('wipe_at').trim(), latest=i.options.getString('latest_wipe'), channel=i.options.getString('channel'), message=i.options.getString('message')||'5X Gather Rates\nInstant Crafting\nFast Respawn\nAutomatic Events\n100+ Players', image=i.options.getString('image_url')||BRAND_BANNER;
+        const ms=Date.parse(wipeAt), latestMs=latest?Date.parse(latest):null;
+        if (!validText(server,100)||Number.isNaN(ms)||(latest&&Number.isNaN(latestMs))) return reply(i,'Invalid wipe configuration','Use valid ISO date/time values.');
+        if (channel&&!/^\d{17,20}$/.test(channel)) return reply(i,'Invalid channel','Use a numeric Discord channel ID.');
+        db.prepare('INSERT INTO wipe_configs (guild_id,channel_id,server_name,wipe_at,latest_wipe_at,announcement,image_url,configured_by,updated_at) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(guild_id) DO UPDATE SET channel_id=excluded.channel_id,server_name=excluded.server_name,wipe_at=excluded.wipe_at,latest_wipe_at=excluded.latest_wipe_at,announcement=excluded.announcement,image_url=excluded.image_url,configured_by=excluded.configured_by,updated_at=excluded.updated_at').run(i.guildId,channel||null,server,new Date(ms).toISOString(),latestMs?new Date(latestMs).toISOString():null,message.slice(0,1500),image.slice(0,1000),i.user.id,new Date().toISOString()); audit(i.guildId,i.user.id,'wipe.configured',server); return reply(i,'Wipe configuration saved',`${server} is scheduled for <t:${Math.floor(ms/1000)}:F> (<t:${Math.floor(ms/1000)}:R>).`);
+      }
+      const cfg=db.prepare('SELECT * FROM wipe_configs WHERE guild_id=?').get(i.guildId); if(!cfg) return reply(i,'No wipe configuration','Run `/wipe config` first.'); const stamp=Math.floor(Date.parse(cfg.wipe_at)/1000);
+      if (sub==='info') return reply(i,'Wipe Watch',`🇪🇺 **EU 6X**\n**Server:** ${cfg.server_name}\n**Next wipe:** <t:${stamp}:F> (<t:${stamp}:R>)\n**Previous wipe:** ${cfg.latest_wipe_at?`<t:${Math.floor(Date.parse(cfg.latest_wipe_at)/1000)}:F>`:'Not recorded'}\n**Announcement channel:** ${cfg.channel_id?`<#${cfg.channel_id}>`:'Not set'}`);
+      const embed=new EmbedBuilder().setColor(0x7c3aed).setTitle('🇪🇺 EU 6X WIPE').setDescription(`**${cfg.server_name}**\n\nNext wipe: <t:${stamp}:F> (<t:${stamp}:R>)\n\n**Server Information**\n${cfg.announcement}`).setFooter({text:BRAND}).setTimestamp(); if(cfg.image_url) embed.setImage(cfg.image_url); return i.reply({embeds:[brandEmbed(embed)]});
     }
     return reply(i,'Module ready','This command is available with safe local records. Live Rust actions require an authenticated provider adapter.');
-  } catch(e) { log.error(e); if(!i.replied && !i.deferred) await i.reply({content:'Command failed. Check the bot logs.',ephemeral:true}); else if(i.deferred) await i.editReply({content:'Command failed. Check the bot logs.'}); }
+  } catch(e) { log.error(e); if(!i.replied&&!i.deferred) await i.reply({content:'Command failed. Check the bot logs.',ephemeral:true}); else if(i.deferred) await i.editReply({content:'Command failed. Check the bot logs.'}); }
 });
 client.on('error', error => log.error({err:error}, 'Discord client error'));
+
 setInterval(() => { for (const guild of client.guilds.cache.values()) refreshTicketPanels(guild.id).catch(error => log.warn({err:error}, 'Ticket refresh failed')); }, 60000);
 client.login(token).catch(error => { log.fatal({err:error}, 'Discord login failed; verify DISCORD_TOKEN'); process.exit(1); });
