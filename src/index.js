@@ -67,7 +67,7 @@ const ticketPanel = (guildId) => {
     {label:'Bot Support',value:'bot_support',description:'Discord bot setup and command help',emoji:'🤖'},
     {label:'Report a Problem',value:'report',description:'Report a bug or community issue',emoji:'🚨'}
   );
-  return {embeds:[new EmbedBuilder().setColor(0x7c3aed).setTitle('🎫  Support Tickets').setDescription('Select a support option, then choose **EU** or **NA** before filling in your questions.\n\nOur team will see your private ticket and help you as soon as possible.').addFields({name:'📊  Support Status',value:`**Open Tickets (Total):** ${total}\n**Open EU Tickets:** ${eu}\n**Open NA Tickets:** ${na}\n**Response Speed:** ⚡ Fast\n**Estimated Help Time:** ⏱️ 12 mins`},{name:'🌍  Regions',value:'🇪🇺 EU support is available now\n🇺🇸 NA support is **COMING SOON**'}).setFooter({text:`${BRAND}  •  Updates every 5 seconds`}).setTimestamp()],components:[new ActionRowBuilder().addComponents(menu)]};
+  return {embeds:[new EmbedBuilder().setColor(0x7c3aed).setTitle('🎫  Support Tickets').setDescription('Select a support option, then choose **EU** or **NA** before filling in your questions.\n\nOur team will see your private ticket and help you as soon as possible.').addFields({name:'📊  Support Status',value:`**Open Tickets (Total):** ${total}\n**Open EU Tickets:** ${eu}\n**Open NA Tickets:** ${na}\n**Response Speed:** ⚡ Fast\n**Estimated Help Time:** ⏱️ 12 mins`},{name:'🌍  Regions',value:'🇪🇺 EU support is available now\n🇺🇸 NA support is **COMING SOON**'}).setFooter({text:`${BRAND}  •  Status refreshes every minute`}).setTimestamp()],components:[new ActionRowBuilder().addComponents(menu)]};
 };
 const refreshTicketPanels = async (guildId) => {
   const rows=db.prepare('SELECT channel_id,message_id FROM ticket_panels WHERE guild_id=?').all(guildId);
@@ -109,16 +109,19 @@ client.on('interactionCreate', async i => {
       const category=i.customId.split(':')[1],region=i.values[0];
       if (region === 'NA') return i.reply({content:'NA support is coming soon. Please select EU for now.',ephemeral:true});
       const modal=new ModalBuilder().setCustomId(`ticket_modal:${category}:${region}`).setTitle(`${region} support ticket`);
-      const question=new TextInputBuilder().setCustomId('question').setLabel('How can we help?').setStyle(TextInputStyle.Paragraph).setPlaceholder('Tell us what happened and include your server/player details.').setRequired(true).setMaxLength(1800);
-      return i.showModal(modal.addComponents(new ActionRowBuilder().addComponents(question)));
+      const linkName=new TextInputBuilder().setCustomId('link_name').setLabel('What is your link name?').setStyle(TextInputStyle.Short).setPlaceholder('Your in-game/server link name').setRequired(true).setMaxLength(100);
+      const issue=new TextInputBuilder().setCustomId('issue').setLabel('What is wrong?').setStyle(TextInputStyle.Short).setPlaceholder('Briefly describe the problem').setRequired(true).setMaxLength(200);
+      const details=new TextInputBuilder().setCustomId('details').setLabel('Tell us everything').setStyle(TextInputStyle.Paragraph).setPlaceholder('Include server, player name, time, screenshots, error messages, and what you tried.').setRequired(true).setMaxLength(1800);
+      return i.showModal(modal.addComponents(new ActionRowBuilder().addComponents(linkName),new ActionRowBuilder().addComponents(issue),new ActionRowBuilder().addComponents(details)));
     }
     if (i.isModalSubmit() && i.customId.startsWith('ticket_modal:')) {
-      const [,category,region]=i.customId.split(':'), question=i.fields.getTextInputValue('question'), guild=i.guild;
+      const [,category,region]=i.customId.split(':'), linkName=i.fields.getTextInputValue('link_name'), issue=i.fields.getTextInputValue('issue'), details=i.fields.getTextInputValue('details'), guild=i.guild;
+      const question=`**Link name:** ${linkName}\n**What is wrong:** ${issue}\n\n**Details:**\n${details}`;
       const safeName=`${region.toLowerCase()}-${i.user.username}`.toLowerCase().replace(/[^a-z0-9-]/g,'').slice(0,70);
       const channel=await guild.channels.create({name:`ticket-${safeName}`,type:ChannelType.GuildText,topic:`${BRAND} | ${region} | ${category} | ${i.user.id}`,permissionOverwrites:[{id:guild.roles.everyone.id,deny:[PermissionsBitField.Flags.ViewChannel]},{id:i.user.id,allow:[PermissionsBitField.Flags.ViewChannel,PermissionsBitField.Flags.SendMessages,PermissionsBitField.Flags.ReadMessageHistory]},{id:guild.members.me.id,allow:[PermissionsBitField.Flags.ViewChannel,PermissionsBitField.Flags.SendMessages,PermissionsBitField.Flags.ManageChannels]}]});
       const id=randomUUID(); db.prepare('INSERT INTO tickets VALUES (?,?,?,?,?,?,?,?,?,?)').run(id,guild.id,channel.id,i.user.id,region,category,question,'open',new Date().toISOString(),null);
       const close=new ButtonBuilder().setCustomId(`ticket_close:${id}`).setLabel('Close ticket').setStyle(ButtonStyle.Danger);
-      await channel.send({content:`<@${i.user.id}>`,embeds:[new EmbedBuilder().setColor(0x8b5cf6).setTitle('Support Ticket').setDescription(question).addFields({name:'Region',value:region,inline:true},{name:'Category',value:category,inline:true}).setFooter({text:BRAND})],components:[new ActionRowBuilder().addComponents(close)]});
+      await channel.send({content:`<@${i.user.id}>`,embeds:[new EmbedBuilder().setColor(0x8b5cf6).setTitle('🎫 Rustworks Support Ticket').setDescription('Thanks for contacting Rustworks RCE. A support team member will review your request and reply here.').addFields({name:'🌍 Region',value:region,inline:true},{name:'🧩 Category',value:category,inline:true},{name:'🔗 Link name',value:linkName,inline:true},{name:'⚠️ What is wrong?',value:issue},{name:'📝 Full request',value:details}).setFooter({text:BRAND})],components:[new ActionRowBuilder().addComponents(close)]});
       await refreshTicketPanels(guild.id); return i.reply({content:`✅ Your ${region} support ticket is open: ${channel}`,ephemeral:true});
     }
     if (i.isButton() && i.customId.startsWith('ticket_close:')) { const id=i.customId.split(':')[1]; db.prepare('UPDATE tickets SET status=\'closed\',closed_at=? WHERE id=?').run(new Date().toISOString(),id); await refreshTicketPanels(i.guildId); await i.reply({content:'✅ Ticket closed. This channel will be removed in 5 seconds.',ephemeral:true}); setTimeout(()=>i.channel?.delete().catch(()=>{}),5000); return; }
@@ -144,5 +147,5 @@ client.on('interactionCreate', async i => {
   } catch(e) { log.error(e); if(!i.replied) await i.reply({content:'Command failed. Check the bot logs.',ephemeral:true}); }
 });
 client.on('error', error => log.error({err:error}, 'Discord client error'));
-setInterval(() => { for (const guild of client.guilds.cache.values()) refreshTicketPanels(guild.id).catch(error => log.warn({err:error}, 'Ticket refresh failed')); }, 5000);
+setInterval(() => { for (const guild of client.guilds.cache.values()) refreshTicketPanels(guild.id).catch(error => log.warn({err:error}, 'Ticket refresh failed')); }, 60000);
 client.login(token).catch(error => { log.fatal({err:error}, 'Discord login failed; verify DISCORD_TOKEN'); process.exit(1); });
